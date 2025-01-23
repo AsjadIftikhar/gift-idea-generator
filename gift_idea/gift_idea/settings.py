@@ -32,6 +32,8 @@ DEBUG = True
 ALLOWED_HOSTS = ['gift-idea-generator-tikz.onrender.com',
                  "http://localhost:3000"]
 
+CORS_ALLOW_ALL_ORIGINS = True
+
 # Application definition
 
 INSTALLED_APPS = [
