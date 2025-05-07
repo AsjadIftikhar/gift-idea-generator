@@ -1,6 +1,8 @@
 from django.http import StreamingHttpResponse
 from openai import OpenAI
 from django.conf import settings
+import threading
+import queue
 
 
 class DeepSeekService:
@@ -16,35 +18,43 @@ class DeepSeekService:
         interests = params.get("interests", "no specific interests")
         relationship = params.get("relationship", "no specific relationship")
 
+        # Simplified prompt with fewer tokens
         prompt = (
-            f"You are a creative gift suggestion assistant. Generate 5-10 unique, thoughtful, "
-            f"and practical gift ideas based on the following parameters:\n"
-            f"- Age: {age}\n"
-            f"- Gender: {gender}\n"
-            f"- Budget: {budget}\n"
-            f"- Interests: {interests}\n"
-            f"- Relationship with the gift receiver: {relationship}\n\n"
-            "Ensure the gift ideas are:\n"
-            "1. Within the budget range.\n"
-            "2. Relevant to the age and gender.\n"
-            "3. Aligned with the interests, if provided.\n"
-            "4. Appropriate for the relationship context (e.g., friend, parent, spouse).\n\n"
-            "Format the response as a json list of objects with a short description for each gift."
+            f"Generate 5 gift ideas for {age} {gender}, budget: {budget}, "
+            f"interests: {interests}, relationship: {relationship}."
         )
 
         def stream_response():
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[
-                    {"role": "system",
-                     "content": "You are a helpful assistant for generating personalized gift ideas."},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.5,
-                stream=True
-            )
-            for chunk in response:
-                yield chunk.choices[0].delta.content
+            response_queue = queue.Queue()
+            
+            def fetch_response():
+                response = self.client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[
+                        {"role": "system",
+                         "content": "You are a gift suggestion assistant. Provide concise gift ideas in JSON format with a list of objects containing 'name' and 'description' fields."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                    max_tokens=500,
+                    stream=True
+                )
+                for chunk in response:
+                    if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
+                        response_queue.put(chunk.choices[0].delta.content)
+                response_queue.put(None)  # Signal completion
+            
+            # Start API call in a separate thread
+            thread = threading.Thread(target=fetch_response)
+            thread.daemon = True
+            thread.start()
+            
+            # Yield results as they become available
+            while True:
+                chunk = response_queue.get()
+                if chunk is None:
+                    break
+                yield chunk
 
         return StreamingHttpResponse(stream_response(), content_type="application/json")
